@@ -1,0 +1,16 @@
+{
+    "manifest_version": 3,
+    "name": "AI Chess Realtime Core",
+    "version": "4.0",
+    "permissions": ["debugger"],
+    "background": {
+        "service_worker": "dist/background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": ["*://*.lichess.org/*", "*://*.chess.com/*"],
+            "js": ["lib/chess.min.js", "dist/content.js"],
+            "run_at": "document_end"
+        }
+    ]
+}

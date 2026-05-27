@@ -1,0 +1,10 @@
+# Thư viện Node
+node_modules/
+
+# File thực thi (Rất nặng, nên tải lại khi clone máy khác)
+stockfish.exe
+
+# Các file build và biến môi trường (nếu có)
+dist/
+.env
+.DS_Store
