@@ -1,238 +1,86 @@
 declare class Chess {
     reset(): void;
-    move(m: string): void;
+    move(m: string): any;
     fen(): string;
     turn(): 'w' | 'b';
     moves(options?: { verbose: boolean }): any[];
     history(options?: { verbose: boolean }): any[];
 }
 
-(function () {
-    'use strict';
+class UIController {
+    private debugDot: HTMLDivElement;
+    private svgLayer: SVGSVGElement | null = null;
+    private boardObserver: ResizeObserver | null = null;
+    private currentBoard: Element | null = null;
 
-    const debugDot = document.createElement('div');
-    debugDot.style.cssText =
-        'position:fixed; bottom:15px; right:15px; width:15px; height:15px; background:#ef4444; border-radius:50%; z-index:999999; box-shadow: 0 0 10px rgba(0,0,0,0.5); transition: 0.3s; pointer-events: none;';
-    document.body.appendChild(debugDot);
-
-    const gameEngine = new Chess();
-    let lastMoveHistoryHash: string | null = null;
-    let computedBestMove: string | null = null;
-    let isAutoPilotActive = false;
-    let isExecutingAutoMove = false;
-    let moveUpdateTimeout: number | undefined;
-
-    let masterMoveList: string[] = [];
-    let lastAutomatedFen: string | null = null;
-    let lastSearchedFen: string | null = null;
-
-    let ws: WebSocket | null = null;
-    let isServerReady = false;
-
-    function resetGameSystem() {
-        clearVisualArrow();
-        masterMoveList = [];
-        lastMoveHistoryHash = null;
-        computedBestMove = null;
-        lastAutomatedFen = null;
-        lastSearchedFen = null;
-        gameEngine.reset();
-
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send('stop');
-            ws.send('position startpos');
-        }
+    constructor() {
+        this.debugDot = document.createElement('div');
+        this.debugDot.style.cssText =
+            'position:fixed; bottom:15px; right:15px; width:15px; height:15px; background:#ef4444; border-radius:50%; z-index:999999; box-shadow: 0 0 10px rgba(0,0,0,0.5); pointer-events: none; transition: background-color 0.3s;';
+        document.body.appendChild(this.debugDot);
     }
 
-    document.addEventListener('click', (event: MouseEvent) => {
-        const target = event.target as HTMLElement;
-        const text = target.innerText?.toLowerCase() || '';
-        const isNewGameButton =
-            text.includes('new 1 min') ||
-            text.includes('new game') ||
-            text.includes('rematch') ||
-            text.includes('play again') ||
-            target.closest('.game-over-button-component') ||
-            target.closest('.ui_v5-button-component') ||
-            target.closest('.game-row__overlay') ||
-            target.closest('.fbt');
-
-        if (isNewGameButton) resetGameSystem();
-    });
-
-    function connectWebSocket() {
-        try {
-            ws = new WebSocket('ws://localhost:8080');
-
-            ws.onopen = () => {
-                debugDot.style.background = '#eab308';
-            };
-
-            ws.onmessage = (event: MessageEvent) => {
-                const outputLine = event.data as string;
-
-                if (outputLine === 'readyok') {
-                    isServerReady = true;
-                    debugDot.style.background = '#10b981';
-                    updateGameState(true);
-                }
-
-                if (outputLine.startsWith('bestmove')) {
-                    const move = outputLine.split(' ')[1];
-                    if (move !== '(none)') {
-                        const legalMoves = gameEngine.moves({ verbose: true });
-                        const isLegal = legalMoves.some(
-                            (m) => m.from + m.to + (m.promotion || '') === move,
-                        );
-
-                        if (!isLegal) return;
-
-                        computedBestMove = move;
-                        renderVisualArrow(computedBestMove);
-
-                        if (isAutoPilotActive && isOurTurn()) {
-                            const currentFen = gameEngine.fen();
-                            if (lastAutomatedFen !== currentFen) {
-                                lastAutomatedFen = currentFen;
-                                dispatchMoveAutomation(computedBestMove);
-                            }
-                        }
-                    }
-                }
-            };
-
-            ws.onclose = () => {
-                isServerReady = false;
-                debugDot.style.background = '#ef4444';
-                setTimeout(connectWebSocket, 1000);
-            };
-        } catch (error) {
-            setTimeout(connectWebSocket, 1000);
-        }
+    public setStatus(color: string) {
+        this.debugDot.style.background = color;
     }
 
-    connectWebSocket();
+    public getBoard(): Element | null {
+        if (!this.currentBoard || !document.contains(this.currentBoard)) {
+            this.currentBoard = document.querySelector(
+                'cg-board, chess-board, .board',
+            );
+            this.attachResizeObserver();
+        }
+        return this.currentBoard;
+    }
 
-    const sleep = (ms: number) =>
-        new Promise((resolve) => setTimeout(resolve, ms));
-
-    function isOurTurn(): boolean {
-        const isBlack = !!document.querySelector(
+    public isBlackOrientation(): boolean {
+        return !!document.querySelector(
             '.flipped, .orientation-black, [orientation="black"], .cg-wrap.orientation-black, chess-board.flipped',
         );
-        return (
-            (isBlack && gameEngine.turn() === 'b') ||
-            (!isBlack && gameEngine.turn() === 'w')
-        );
     }
 
-    window.addEventListener('keydown', (event: KeyboardEvent) => {
-        if (event.altKey && event.key.toLowerCase() === 'a') {
-            isAutoPilotActive = !isAutoPilotActive;
-            if (computedBestMove) renderVisualArrow(computedBestMove);
-            if (
-                isAutoPilotActive &&
-                computedBestMove &&
-                !isExecutingAutoMove &&
-                isOurTurn()
-            ) {
-                const currentFen = gameEngine.fen();
-                if (lastAutomatedFen !== currentFen) {
-                    lastAutomatedFen = currentFen;
-                    dispatchMoveAutomation(computedBestMove);
-                }
-            }
-        }
-    });
+    private attachResizeObserver() {
+        if (this.boardObserver) this.boardObserver.disconnect();
+        if (!this.currentBoard) return;
 
-    function getAbsoluteSquareCoordinates(
-        boardElement: Element,
-        squareName: string,
-        isBlackOrientation: boolean,
-    ) {
-        const rect = boardElement.getBoundingClientRect();
-        let fileIndex = squareName.charCodeAt(0) - 97;
-        let rankIndex = 8 - parseInt(squareName[1]);
-        if (isBlackOrientation) {
-            fileIndex = 7 - fileIndex;
-            rankIndex = 7 - rankIndex;
-        }
-        return {
-            x: rect.left + (fileIndex + 0.5) * (rect.width / 8),
-            y: rect.top + (rankIndex + 0.5) * (rect.height / 8),
-        };
+        this.boardObserver = new ResizeObserver(() => this.syncSvgPosition());
+        this.boardObserver.observe(this.currentBoard);
     }
 
-    async function dispatchMoveAutomation(moveString: string) {
-        if (isExecutingAutoMove || !moveString || moveString.length < 4) return;
-        const board = document.querySelector('cg-board, chess-board, .board');
-        if (!board) return;
-
-        isExecutingAutoMove = true;
-        const safetyUnlockTimeout = setTimeout(() => {
-            isExecutingAutoMove = false;
-        }, 1200);
-        const isBlack = !!document.querySelector(
-            '.flipped, .orientation-black, [orientation="black"], .cg-wrap.orientation-black, chess-board.flipped',
-        );
-
-        try {
-            if (!chrome?.runtime?.sendMessage)
-                throw new Error('Extension context invalid');
-
-            const originCoords = getAbsoluteSquareCoordinates(
-                board,
-                moveString.substring(0, 2),
-                isBlack,
-            );
-            chrome.runtime.sendMessage({
-                action: 'execute_hardware_click',
-                x: originCoords.x,
-                y: originCoords.y,
-            });
-
-            await sleep(12);
-
-            const targetCoords = getAbsoluteSquareCoordinates(
-                board,
-                moveString.substring(2, 4),
-                isBlack,
-            );
-            chrome.runtime.sendMessage({
-                action: 'execute_hardware_click',
-                x: targetCoords.x,
-                y: targetCoords.y,
-            });
-        } catch (err) {
-            console.error('🔥 Trạng thái kết nối Extension gián đoạn.', err);
-        } finally {
-            clearTimeout(safetyUnlockTimeout);
-            isExecutingAutoMove = false;
-        }
+    private syncSvgPosition() {
+        if (!this.svgLayer || !this.currentBoard) return;
+        const rect = this.currentBoard.getBoundingClientRect();
+        this.svgLayer.style.top = `${rect.top}px`;
+        this.svgLayer.style.left = `${rect.left}px`;
+        this.svgLayer.style.width = `${rect.width}px`;
+        this.svgLayer.style.height = `${rect.height}px`;
     }
 
-    function renderVisualArrow(moveString: string) {
+    public clearArrow() {
+        if (this.svgLayer) this.svgLayer.innerHTML = '';
+    }
+
+    public renderArrow(moveString: string, isActive: boolean) {
         if (!moveString || moveString.length < 4) return;
-        const board = document.querySelector('cg-board, chess-board, .board');
+        const board = this.getBoard();
         if (!board) return;
 
-        const isBlack = !!document.querySelector(
-            '.flipped, .orientation-black, [orientation="black"], .cg-wrap.orientation-black, chess-board.flipped',
-        );
-        let svgLayer = document.getElementById('ai-core-arrow-layer') as any;
-
-        if (!svgLayer) {
-            svgLayer = document.createElementNS(
+        if (!this.svgLayer) {
+            this.svgLayer = document.createElementNS(
                 'http://www.w3.org/2000/svg',
                 'svg',
             );
-            svgLayer.id = 'ai-core-arrow-layer';
-            svgLayer.style.cssText =
+            this.svgLayer.id = 'ai-core-arrow-layer';
+            this.svgLayer.style.cssText =
                 'position: fixed; pointer-events: none; z-index: 9999999 !important; overflow: visible; display: block;';
-            document.body.appendChild(svgLayer);
+            document.body.appendChild(this.svgLayer);
+            this.syncSvgPosition();
         }
 
-        svgLayer.setAttribute('viewBox', '0 0 100 100');
+        this.svgLayer.setAttribute('viewBox', '0 0 100 100');
+        const isBlack = this.isBlackOrientation();
+
         const calcPercent = (sq: string) => {
             let f = sq.charCodeAt(0) - 97;
             let r = 8 - parseInt(sq[1]);
@@ -247,10 +95,10 @@ declare class Chess {
         const ptEnd = calcPercent(moveString.substring(2, 4));
         const angle = Math.atan2(ptEnd.y - ptStart.y, ptEnd.x - ptStart.x);
 
-        svgLayer.innerHTML = '';
-        const uiColor = isAutoPilotActive
+        const uiColor = isActive
             ? 'rgba(16, 185, 129, 0.9)'
             : 'rgba(239, 68, 68, 0.9)';
+        this.svgLayer.innerHTML = '';
 
         const line = document.createElementNS(
             'http://www.w3.org/2000/svg',
@@ -263,7 +111,6 @@ declare class Chess {
         line.setAttribute('stroke', uiColor);
         line.setAttribute('stroke-width', '2.5');
         line.setAttribute('stroke-linecap', 'round');
-        svgLayer.appendChild(line);
 
         const head = document.createElementNS(
             'http://www.w3.org/2000/svg',
@@ -275,28 +122,224 @@ declare class Chess {
             'transform',
             `translate(${ptEnd.x}, ${ptEnd.y}) rotate(${(angle * 180) / Math.PI})`,
         );
-        svgLayer.appendChild(head);
+
+        this.svgLayer.appendChild(line);
+        this.svgLayer.appendChild(head);
+    }
+}
+
+class AICore {
+    private engine = new Chess();
+    private ui = new UIController();
+    private ws: WebSocket | null = null;
+
+    private state = {
+        masterMoveList: [] as string[],
+        lastHash: null as string | null,
+        lastFen: null as string | null,
+        lastAutomatedFen: null as string | null,
+        computedBestMove: null as string | null,
+        isAutoPilot: false,
+        isExecuting: false,
+        isServerReady: false,
+    };
+
+    private moveUpdateTimeout: number | undefined;
+    private targetSelector = '';
+
+    constructor() {
+        this.initSelector();
+        this.connectWebSocket();
+        this.setupKeyboard();
+        this.setupResetListeners();
+        this.setupDOMObserver();
     }
 
-    function clearVisualArrow() {
-        const svgLayer = document.getElementById('ai-core-arrow-layer');
-        if (svgLayer) svgLayer.innerHTML = '';
+    private initSelector() {
+        const isChessCom = window.location.hostname.includes('chess.com');
+        this.targetSelector = isChessCom
+            ? '.move-list-container .move-text-component, .move-list-row .node, .move-list-live-response .node'
+            : 'l4x rm, rm6 rm, u8t, kwdb, .tview2 m, v1f, .main-line-ply, [data-node], rm6 kwdb, l4x kwdb, m';
     }
 
-    function uiLoop() {
-        const svgLayer = document.getElementById('ai-core-arrow-layer');
-        const board = document.querySelector('cg-board, chess-board, .board');
-        if (svgLayer && board) {
-            const rect = board.getBoundingClientRect();
-            svgLayer.style.top = rect.top + 'px';
-            svgLayer.style.left = rect.left + 'px';
-            svgLayer.style.width = rect.width + 'px';
-            svgLayer.style.height = rect.height + 'px';
+    private connectWebSocket() {
+        try {
+            this.ws = new WebSocket('ws://localhost:8080');
+
+            this.ws.onopen = () => this.ui.setStatus('#eab308');
+            this.ws.onclose = () => {
+                this.state.isServerReady = false;
+                this.ui.setStatus('#ef4444');
+                setTimeout(() => this.connectWebSocket(), 1000);
+            };
+            this.ws.onmessage = (e: MessageEvent) =>
+                this.handleWSMessage(e.data);
+        } catch {
+            setTimeout(() => this.connectWebSocket(), 1000);
         }
-        requestAnimationFrame(uiLoop);
     }
 
-    function extractMoveText(node: HTMLElement): string {
+    private handleWSMessage(data: string) {
+        if (data === 'readyok') {
+            this.state.isServerReady = true;
+            this.ui.setStatus('#10b981');
+            this.processGameState(true);
+        }
+
+        if (data.startsWith('bestmove')) {
+            const move = data.split(' ')[1];
+            if (move === '(none)') return;
+
+            // Strict Validation
+            const isLegal = this.engine
+                .moves({ verbose: true })
+                .some((m) => m.from + m.to + (m.promotion || '') === move);
+            if (!isLegal) return;
+
+            this.state.computedBestMove = move;
+            this.ui.renderArrow(move, this.state.isAutoPilot);
+
+            this.triggerAutomationIfNeeded();
+        }
+    }
+
+    private isOurTurn(): boolean {
+        const isBlack = this.ui.isBlackOrientation();
+        return (
+            (isBlack && this.engine.turn() === 'b') ||
+            (!isBlack && this.engine.turn() === 'w')
+        );
+    }
+
+    private triggerAutomationIfNeeded() {
+        if (
+            this.state.isAutoPilot &&
+            this.state.computedBestMove &&
+            !this.state.isExecuting &&
+            this.isOurTurn()
+        ) {
+            const currentFen = this.engine.fen();
+            if (this.state.lastAutomatedFen !== currentFen) {
+                this.state.lastAutomatedFen = currentFen;
+                this.executeHardwareClick(this.state.computedBestMove);
+            }
+        }
+    }
+
+    private setupKeyboard() {
+        window.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.altKey && e.key.toLowerCase() === 'a') {
+                this.state.isAutoPilot = !this.state.isAutoPilot;
+                if (this.state.computedBestMove)
+                    this.ui.renderArrow(
+                        this.state.computedBestMove,
+                        this.state.isAutoPilot,
+                    );
+                this.triggerAutomationIfNeeded();
+            }
+        });
+    }
+
+    private getCoords(board: Element, sq: string, isBlack: boolean) {
+        const rect = board.getBoundingClientRect();
+        let f = sq.charCodeAt(0) - 97;
+        let r = 8 - parseInt(sq[1]);
+        if (isBlack) {
+            f = 7 - f;
+            r = 7 - r;
+        }
+        return {
+            x: rect.left + (f + 0.5) * (rect.width / 8),
+            y: rect.top + (r + 0.5) * (rect.height / 8),
+        };
+    }
+
+    private async executeHardwareClick(moveString: string) {
+        if (!moveString || moveString.length < 4) return;
+        const board = this.ui.getBoard();
+        if (!board) return;
+
+        this.state.isExecuting = true;
+
+        const unlockTimer = setTimeout(() => {
+            this.state.isExecuting = false;
+        }, 1200);
+        const isBlack = this.ui.isBlackOrientation();
+
+        try {
+            if (!chrome?.runtime?.sendMessage)
+                throw new Error('Context Invalidated');
+
+            const start = this.getCoords(
+                board,
+                moveString.substring(0, 2),
+                isBlack,
+            );
+            const end = this.getCoords(
+                board,
+                moveString.substring(2, 4),
+                isBlack,
+            );
+
+            await chrome.runtime.sendMessage({
+                action: 'execute_hardware_click',
+                x: start.x,
+                y: start.y,
+            });
+            await new Promise((r) => setTimeout(r, 12));
+            await chrome.runtime.sendMessage({
+                action: 'execute_hardware_click',
+                x: end.x,
+                y: end.y,
+            });
+        } catch (err) {
+            console.error(
+                '🔥 [AI Core] Mất kết nối Background Script (Zombie Tab).',
+                err,
+            );
+            this.state.isAutoPilot = false;
+            this.ui.setStatus('#ef4444');
+            this.ui.clearArrow();
+        } finally {
+            clearTimeout(unlockTimer);
+            this.state.isExecuting = false;
+        }
+    }
+
+    private setupResetListeners() {
+        document.addEventListener('click', (e: MouseEvent) => {
+            const target = e.target as HTMLElement;
+            const text = target.innerText?.toLowerCase() || '';
+            if (
+                text.includes('new 1 min') ||
+                text.includes('new game') ||
+                text.includes('rematch') ||
+                text.includes('play again') ||
+                target.closest(
+                    '.game-over-button-component, .ui_v5-button-component, .game-row__overlay, .fbt',
+                )
+            ) {
+                this.resetSystem();
+            }
+        });
+    }
+
+    private resetSystem() {
+        this.ui.clearArrow();
+        this.state.masterMoveList = [];
+        this.state.lastHash = null;
+        this.state.computedBestMove = null;
+        this.state.lastAutomatedFen = null;
+        this.state.lastFen = null;
+        this.engine.reset();
+
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send('stop');
+            this.ws.send('position startpos');
+        }
+    }
+
+    private sanitizeSAN(node: HTMLElement): string {
         let text = node.textContent?.trim() || '';
         text = text
             .replace(/0-0-0/g, 'O-O-O')
@@ -305,45 +348,40 @@ declare class Chess {
             .replace(/o-o/gi, 'O-O');
 
         let piece = '';
-        const figurineNode = node.querySelector('[data-figurine]');
-        if (figurineNode) {
-            piece = figurineNode.getAttribute('data-figurine') || '';
-        } else {
-            const iconNode = node.querySelector('.icon-font-chess');
-            if (iconNode) {
-                const cls = iconNode.className;
-                if (cls.includes('knight')) piece = 'N';
-                else if (cls.includes('bishop')) piece = 'B';
-                else if (cls.includes('rook')) piece = 'R';
-                else if (cls.includes('queen')) piece = 'Q';
-                else if (cls.includes('king')) piece = 'K';
-                else if (cls.includes('castling-queenside')) return 'O-O-O';
-                else if (cls.includes('castling-kingside')) return 'O-O';
+        const figurine = node.querySelector('[data-figurine]');
+        if (figurine) piece = figurine.getAttribute('data-figurine') || '';
+        else {
+            const icon = node.querySelector('.icon-font-chess');
+            if (icon) {
+                const c = icon.className;
+                if (c.includes('knight')) piece = 'N';
+                else if (c.includes('bishop')) piece = 'B';
+                else if (c.includes('rook')) piece = 'R';
+                else if (c.includes('queen')) piece = 'Q';
+                else if (c.includes('king')) piece = 'K';
+                else if (c.includes('queenside')) return 'O-O-O';
+                else if (c.includes('kingside')) return 'O-O';
             }
         }
 
         piece = piece.toUpperCase();
-        text = text.replace(/[\n\r\t]/g, ' ').trim();
-        text = text.replace(
-            /(Brilliant|Great|Best|Excellent|Good|Book|Inaccuracy|Mistake|Miss|Blunder|Forced)/gi,
-            '',
-        );
+        text = text
+            .replace(/[\n\r\t]/g, ' ')
+            .replace(
+                /(Brilliant|Great|Best|Excellent|Good|Book|Inaccuracy|Mistake|Miss|Blunder|Forced)/gi,
+                '',
+            );
         text = text
             .replace(/\d+:\d+/g, '')
             .replace(/[+-]?\d+[\.,]\d+s?/g, '')
             .replace(/^\d+\.+\s*/, '');
         text = text.replace(/[^a-zA-Z0-9\-=\+#O]/g, '');
-
         if (!text) return '';
 
-        if (!piece || piece === 'P') {
+        if (!piece || piece === 'P')
             text = text.replace(/^([a-h])([a-h])([1-8])/, '$1x$2$3');
-        }
-
         if (piece && !text.includes('O-O')) {
-            if (text.includes('=')) {
-                text = text.replace(/=/g, '');
-            }
+            if (text.includes('=')) text = text.replace(/=/g, '');
             if (!text.startsWith(piece)) text = piece + text;
         } else if (!piece && text.includes('=')) {
             if (/^[a-h](x[a-h])?[18]=$/.test(text)) text += 'Q';
@@ -351,190 +389,175 @@ declare class Chess {
         return text;
     }
 
-    function syncMasterMoveList(visibleMoves: string[]) {
-        if (visibleMoves.length === 0) {
-            if (masterMoveList.length > 0) resetGameSystem();
+    private syncMoveList(newMoves: string[]) {
+        const master = this.state.masterMoveList;
+        if (newMoves.length === 0) {
+            if (master.length > 0) this.resetSystem();
+            return;
+        }
+        if (
+            master.length > 0 &&
+            newMoves.length > 0 &&
+            master[0] !== newMoves[0]
+        ) {
+            this.resetSystem();
+            this.state.masterMoveList = [...newMoves];
+            return;
+        }
+        if (master.length === 0 || newMoves.length <= 3) {
+            this.state.masterMoveList = [...newMoves];
             return;
         }
 
-        if (masterMoveList.length > 0 && visibleMoves.length > 0) {
-            if (masterMoveList[0] !== visibleMoves[0]) {
-                resetGameSystem();
-                masterMoveList = [...visibleMoves];
-                return;
+        let matchLen = 0;
+        const max = Math.min(master.length, newMoves.length);
+        for (let i = 1; i <= max; i++) {
+            let isMatch = true;
+            for (let j = 0; j < i; j++) {
+                if (master[master.length - i + j] !== newMoves[j]) {
+                    isMatch = false;
+                    break;
+                }
             }
+            if (isMatch) matchLen = i;
         }
-
-        if (masterMoveList.length === 0 || visibleMoves.length <= 3) {
-            masterMoveList = [...visibleMoves];
-            return;
-        }
-
-        let bestMatchLength = 0;
-        const maxCheck = Math.min(masterMoveList.length, visibleMoves.length);
-
-        for (let i = 1; i <= maxCheck; i++) {
-            const masterSuffix = masterMoveList.slice(-i).join('|');
-            const visiblePrefix = visibleMoves.slice(0, i).join('|');
-            if (masterSuffix === visiblePrefix) bestMatchLength = i;
-        }
-
-        if (bestMatchLength > 0) {
-            masterMoveList.push(...visibleMoves.slice(bestMatchLength));
-        }
+        if (matchLen > 0)
+            this.state.masterMoveList.push(...newMoves.slice(matchLen));
     }
 
-    function updateGameState(force = false) {
-        if (!isServerReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+    private processGameState(force = false) {
+        if (
+            !this.state.isServerReady ||
+            !this.ws ||
+            this.ws.readyState !== WebSocket.OPEN
+        )
+            return;
 
-        const isChessCom = window.location.hostname.includes('chess.com');
-        let targetSelector = isChessCom
-            ? '.move-list-container .move-text-component, .move-list-row .node, .move-list-live-response .node'
-            : 'l4x rm, rm6 rm, u8t, kwdb, .tview2 m, v1f, .main-line-ply, [data-node], rm6 kwdb, l4x kwdb, m';
-
-        const rawNodes = Array.from(document.querySelectorAll(targetSelector));
-
+        const rawNodes = Array.from(
+            document.querySelectorAll(this.targetSelector),
+        );
         const nodes = rawNodes.filter((n) => {
-            const htmlNode = n as HTMLElement;
-            // Bổ sung lọc '.time' để tránh rác FEN từ đồng hồ
-            if (
-                htmlNode.classList.contains('time-white') ||
-                htmlNode.classList.contains('time-black') ||
-                htmlNode.classList.contains('time') ||
-                htmlNode.hasAttribute('data-move-list-el')
-            )
-                return false;
-            if (
-                htmlNode.closest(
-                    '.popover, .tooltip, .hover-content, [id*="popover"], [id*="tooltip"]',
-                )
-            )
-                return false;
-            return true;
+            const e = n as HTMLElement;
+            return !(
+                e.classList.contains('time-white') ||
+                e.classList.contains('time-black') ||
+                e.classList.contains('time') ||
+                e.hasAttribute('data-move-list-el') ||
+                e.closest('.popover, .tooltip, [id*="popover"]')
+            );
         });
 
         if (nodes.length === 0) {
-            syncMasterMoveList([]);
-            const currentHash = 'startpos';
+            this.syncMoveList([]);
+            if ('startpos' !== this.state.lastHash || force) {
+                this.state.lastHash = 'startpos';
+                this.ui.clearArrow();
+                this.state.computedBestMove = null;
+                this.engine.reset();
+                this.ui.setStatus('#10b981');
 
-            if (currentHash !== lastMoveHistoryHash || force) {
-                lastMoveHistoryHash = currentHash;
-                clearVisualArrow();
-                computedBestMove = null;
-                gameEngine.reset();
-
-                debugDot.style.background = '#10b981';
-
-                if (currentHash !== lastSearchedFen || force) {
-                    lastSearchedFen = currentHash;
-                    ws.send('stop');
-                    ws.send('position startpos');
-                    ws.send('go movetime 200');
+                if ('startpos' !== this.state.lastFen || force) {
+                    this.state.lastFen = 'startpos';
+                    this.ws.send('stop');
+                    this.ws.send('position startpos');
+                    this.ws.send('go movetime 150');
                 }
             }
             return;
         }
 
-        let activeIndex = nodes.length - 1;
+        let activeIdx = nodes.length - 1;
         for (let i = nodes.length - 1; i >= 0; i--) {
-            const n = nodes[i] as HTMLElement;
+            const e = nodes[i] as HTMLElement;
             if (
-                n.classList.contains('active') ||
-                n.classList.contains('selected') ||
-                n.classList.contains('act') ||
-                n.hasAttribute('active') ||
-                n.querySelector('.selected, .active, .highlight, .act')
+                e.classList.contains('active') ||
+                e.classList.contains('selected') ||
+                e.classList.contains('act') ||
+                e.hasAttribute('active') ||
+                e.querySelector('.selected, .active, .highlight, .act')
             ) {
-                activeIndex = i;
+                activeIdx = i;
                 break;
             }
         }
 
-        const visibleMoves = nodes
-            .slice(0, activeIndex + 1)
-            .map((n) => extractMoveText(n as HTMLElement))
+        const visible = nodes
+            .slice(0, activeIdx + 1)
+            .map((n) => this.sanitizeSAN(n as HTMLElement))
             .filter((m) => m.length >= 2);
-        const currentHash = visibleMoves.join('|');
+        const hash = visible.join('|');
 
-        if (currentHash !== lastMoveHistoryHash || force) {
-            lastMoveHistoryHash = currentHash;
-            clearVisualArrow();
-            computedBestMove = null;
+        if (hash !== this.state.lastHash || force) {
+            this.state.lastHash = hash;
+            this.ui.clearArrow();
+            this.state.computedBestMove = null;
 
-            syncMasterMoveList(visibleMoves);
-            gameEngine.reset();
-            let isSyncError = false;
+            this.syncMoveList(visible);
+            this.engine.reset();
+            let err = false;
 
-            for (const move of masterMoveList) {
-                if (gameEngine.move(move) === null) {
-                    isSyncError = true;
+            for (const m of this.state.masterMoveList) {
+                if (!this.engine.move(m)) {
+                    err = true;
                     break;
                 }
             }
 
-            if (isSyncError) {
-                debugDot.style.background = '#f97316';
-                return;
-            }
+            if (err) return this.ui.setStatus('#f97316');
+            this.ui.setStatus('#10b981');
 
-            debugDot.style.background = '#10b981';
-            const currentFen = gameEngine.fen();
-
-            if (currentFen !== lastSearchedFen || force) {
-                lastSearchedFen = currentFen;
-                const uciString = gameEngine
+            const fen = this.engine.fen();
+            if (fen !== this.state.lastFen || force) {
+                this.state.lastFen = fen;
+                const uci = this.engine
                     .history({ verbose: true })
                     .map((m: any) => m.from + m.to + (m.promotion || ''))
                     .join(' ');
-
-                ws.send('stop');
-                ws.send(
-                    uciString.length > 0
-                        ? 'position startpos moves ' + uciString
+                this.ws.send('stop');
+                this.ws.send(
+                    uci
+                        ? `position startpos moves ${uci}`
                         : 'position startpos',
                 );
-                ws.send('go movetime 200');
+                this.ws.send('go movetime 200');
             }
         }
     }
 
-    const domObserver = new MutationObserver((mutations) => {
-        let shouldTriggerUpdate = false;
-
-        for (const mutation of mutations) {
-            const target = mutation.target as HTMLElement;
-            if (!target || !target.closest) continue;
-
-            if (
-                target.closest(
-                    '.move-list-container, wc-move-list, chess-board, cg-board, rm6, l4x, kwdb, tview2, .main-line-ply, .round__app, .analyse__app, .mchat',
-                ) ||
-                target.classList?.contains('node') ||
-                target.classList?.contains('move-text-component') ||
-                ['KWDB', 'RM6', 'L4X', 'M', 'RM', 'U8T'].includes(
-                    target.tagName,
-                )
-            ) {
-                shouldTriggerUpdate = true;
-                break;
+    private setupDOMObserver() {
+        const observer = new MutationObserver((mutations) => {
+            let trigger = false;
+            for (const m of mutations) {
+                const t = m.target as HTMLElement;
+                if (!t || !t.closest) continue;
+                if (
+                    t.closest(
+                        '.move-list-container, wc-move-list, chess-board, cg-board, rm6, l4x, kwdb, tview2, .main-line-ply, .round__app, .analyse__app',
+                    ) ||
+                    t.classList?.contains('node') ||
+                    t.classList?.contains('move-text-component') ||
+                    ['KWDB', 'RM6', 'L4X', 'M', 'RM', 'U8T'].includes(t.tagName)
+                ) {
+                    trigger = true;
+                    break;
+                }
             }
-        }
+            if (!trigger) return;
+            clearTimeout(this.moveUpdateTimeout);
+            this.moveUpdateTimeout = window.setTimeout(
+                () => this.processGameState(false),
+                80,
+            );
+        });
 
-        if (!shouldTriggerUpdate) return;
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class'],
+            characterData: true,
+        });
+    }
+}
 
-        clearTimeout(moveUpdateTimeout);
-        moveUpdateTimeout = window.setTimeout(
-            () => updateGameState(false),
-            100,
-        );
-    });
-
-    requestAnimationFrame(uiLoop);
-    domObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['class'],
-        characterData: true,
-    });
-})();
+new AICore();
