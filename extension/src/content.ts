@@ -43,7 +43,6 @@ class UIController {
     private attachResizeObserver() {
         if (this.boardObserver) this.boardObserver.disconnect();
         if (!this.currentBoard) return;
-
         this.boardObserver = new ResizeObserver(() => this.syncSvgPosition());
         this.boardObserver.observe(this.currentBoard);
     }
@@ -190,7 +189,6 @@ class AICore {
             const move = data.split(' ')[1];
             if (move === '(none)') return;
 
-            // Strict Validation
             const isLegal = this.engine
                 .moves({ verbose: true })
                 .some((m) => m.from + m.to + (m.promotion || '') === move);
@@ -260,7 +258,6 @@ class AICore {
         if (!board) return;
 
         this.state.isExecuting = true;
-
         const unlockTimer = setTimeout(() => {
             this.state.isExecuting = false;
         }, 1200);
@@ -269,7 +266,6 @@ class AICore {
         try {
             if (!chrome?.runtime?.sendMessage)
                 throw new Error('Context Invalidated');
-
             const start = this.getCoords(
                 board,
                 moveString.substring(0, 2),
@@ -293,10 +289,7 @@ class AICore {
                 y: end.y,
             });
         } catch (err) {
-            console.error(
-                '🔥 [AI Core] Mất kết nối Background Script (Zombie Tab).',
-                err,
-            );
+            console.error('🔥 [AI Core] Lỗi click phần cứng:', err);
             this.state.isAutoPilot = false;
             this.ui.setStatus('#ef4444');
             this.ui.clearArrow();
@@ -425,6 +418,28 @@ class AICore {
             this.state.masterMoveList.push(...newMoves.slice(matchLen));
     }
 
+    private getClockMs(isWhite: boolean): number {
+        const query = isWhite
+            ? '.time-white, .rclock-white .time, [class*="white"] .time, .clock-white'
+            : '.time-black, .rclock-black .time, [class*="black"] .time, .clock-black';
+
+        const nodes = document.querySelectorAll(query);
+        for (let i = 0; i < nodes.length; i++) {
+            const text = (nodes[i] as HTMLElement).innerText?.replace(
+                /[^0-9:\.]/g,
+                '',
+            );
+            if (text && /\d/.test(text)) {
+                if (text.includes(':')) {
+                    const [m, s] = text.split(':');
+                    return (parseInt(m, 10) * 60 + parseFloat(s)) * 1000;
+                }
+                return parseFloat(text) * 1000;
+            }
+        }
+        return 0;
+    }
+
     private processGameState(force = false) {
         if (
             !this.state.isServerReady ||
@@ -447,6 +462,13 @@ class AICore {
             );
         });
 
+        const wTime = this.getClockMs(true);
+        const bTime = this.getClockMs(false);
+        let goCmd = 'go movetime 200';
+        if (wTime > 0 && bTime > 0) {
+            goCmd = `go wtime ${Math.floor(wTime)} btime ${Math.floor(bTime)}`;
+        }
+
         if (nodes.length === 0) {
             this.syncMoveList([]);
             if ('startpos' !== this.state.lastHash || force) {
@@ -460,7 +482,7 @@ class AICore {
                     this.state.lastFen = 'startpos';
                     this.ws.send('stop');
                     this.ws.send('position startpos');
-                    this.ws.send('go movetime 150');
+                    this.ws.send(goCmd);
                 }
             }
             return;
@@ -497,7 +519,7 @@ class AICore {
             let err = false;
 
             for (const m of this.state.masterMoveList) {
-                if (!this.engine.move(m)) {
+                if (!(this.engine.move(m) as any)) {
                     err = true;
                     break;
                 }
@@ -513,13 +535,15 @@ class AICore {
                     .history({ verbose: true })
                     .map((m: any) => m.from + m.to + (m.promotion || ''))
                     .join(' ');
+
                 this.ws.send('stop');
                 this.ws.send(
                     uci
                         ? `position startpos moves ${uci}`
                         : 'position startpos',
                 );
-                this.ws.send('go movetime 200');
+
+                this.ws.send(goCmd);
             }
         }
     }

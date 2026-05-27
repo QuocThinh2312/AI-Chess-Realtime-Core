@@ -30,6 +30,7 @@ class ChessServer {
                 'setoption name Hash value 4096',
                 'setoption name Threads value 8',
                 'setoption name Use NNUE value true',
+                'setoption name SyzygyPath value ./Syzygy',
                 'isready',
             ];
             this.engine.stdin.write(initCommands.join('\n') + '\n');
