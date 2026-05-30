@@ -1,10 +1,12 @@
 {
     "name": "chess-server",
     "version": "1.0.0",
-    "description": "",
-    "main": "index.js",
+    "description": "WebSocket Server for AI Chess",
+    "main": "dist/server.js",
     "scripts": {
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "dev": "ts-node src/server.ts",
+        "build": "tsc",
+        "start": "node dist/server.js"
     },
     "keywords": [],
     "author": "",

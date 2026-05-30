@@ -1,8 +1,10 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { WebSocketServer, WebSocket } from 'ws';
+import path from 'path';
 
 const PORT = 8080;
-const ENGINE_PATH = './stockfish.exe';
+const ENGINE_PATH = path.join(__dirname, '../stockfish.exe');
+const SYZYGY_PATH = path.join(__dirname, '../Syzygy');
 
 class ChessServer {
     private wss: WebSocketServer;
@@ -30,7 +32,7 @@ class ChessServer {
                 'setoption name Hash value 4096',
                 'setoption name Threads value 8',
                 'setoption name Use NNUE value true',
-                'setoption name SyzygyPath value ./Syzygy',
+                `setoption name SyzygyPath value ${SYZYGY_PATH}`,
                 'setoption name SyzygyProbeDepth value 1',
                 'setoption name SyzygyProbeLimit value 7',
                 'setoption name Syzygy50MoveRule value true',
