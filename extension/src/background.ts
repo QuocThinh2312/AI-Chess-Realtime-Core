@@ -47,7 +47,7 @@ class HardwareClicker {
                         clickCount: 1,
                     },
                 );
-                await this.sleep(8);
+                await this.sleep(4);
                 await this.sendCommandAsync(
                     action.target,
                     'Input.dispatchMouseEvent',
@@ -59,7 +59,7 @@ class HardwareClicker {
                         clickCount: 1,
                     },
                 );
-                await this.sleep(2);
+                await this.sleep(1);
             } catch (error) {
                 console.warn(
                     '[Background] Lỗi thực thi click phần cứng:',

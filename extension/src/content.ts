@@ -260,12 +260,13 @@ class AICore {
         this.state.isExecuting = true;
         const unlockTimer = setTimeout(() => {
             this.state.isExecuting = false;
-        }, 1200);
+        }, 1500);
         const isBlack = this.ui.isBlackOrientation();
 
         try {
             if (!chrome?.runtime?.sendMessage)
                 throw new Error('Context Invalidated');
+
             const start = this.getCoords(
                 board,
                 moveString.substring(0, 2),
@@ -277,17 +278,94 @@ class AICore {
                 isBlack,
             );
 
-            await chrome.runtime.sendMessage({
-                action: 'execute_hardware_click',
-                x: start.x,
-                y: start.y,
-            });
-            await new Promise((r) => setTimeout(r, 12));
-            await chrome.runtime.sendMessage({
-                action: 'execute_hardware_click',
-                x: end.x,
-                y: end.y,
-            });
+            await chrome.runtime
+                .sendMessage({
+                    action: 'execute_hardware_click',
+                    x: start.x,
+                    y: start.y,
+                })
+                .catch(() => {});
+            await new Promise((r) => setTimeout(r, 15));
+
+            await chrome.runtime
+                .sendMessage({
+                    action: 'execute_hardware_click',
+                    x: end.x,
+                    y: end.y,
+                })
+                .catch(() => {});
+
+            if (moveString.length === 5 && this.state.isAutoPilot) {
+                const promoteTo = moveString[4].toLowerCase();
+
+                const pieceClassMap: Record<string, string> = {
+                    q: 'queen',
+                    r: 'rook',
+                    b: 'bishop',
+                    n: 'knight',
+                };
+                const pieceWord = pieceClassMap[promoteTo] || 'queen';
+
+                let targetEl: HTMLElement | null = null;
+
+                const selectors = [
+                    `#promotion-choice piece.${pieceWord}`,
+                    `#promotion-choice .${pieceWord}`,
+                    `cg-board .promotion-choice piece`,
+                    `.promotion-menu .${pieceWord}`,
+                    `.promotion-window .${pieceWord}`,
+                    `.promotion-list .${pieceWord}`,
+                    `.promotion-pieces .${promoteTo}`,
+                    `.promotion-piece.${promoteTo}`,
+                    `[data-piece="${promoteTo}"]`,
+                    `[data-piece$="${promoteTo}"]`,
+                    `.promotion-menu [class*="${pieceWord}"]`,
+                    `.promotion-window [class*="${pieceWord}"]`,
+                ];
+
+                for (let i = 0; i < 50; i++) {
+                    await new Promise((r) => setTimeout(r, 10));
+                    for (const selector of selectors) {
+                        const el = document.querySelector(selector);
+                        if (el && el.getBoundingClientRect().width > 0) {
+                            targetEl = el as HTMLElement;
+                            break;
+                        }
+                    }
+                    if (targetEl) break;
+                }
+
+                if (targetEl) {
+                    const rect = targetEl.getBoundingClientRect();
+                    const targetX = rect.left + rect.width / 2;
+                    const targetY = rect.top + rect.height / 2;
+
+                    await new Promise((r) => setTimeout(r, 50));
+
+                    await chrome.runtime
+                        .sendMessage({
+                            action: 'execute_hardware_click',
+                            x: targetX,
+                            y: targetY,
+                        })
+                        .catch(() => {});
+                    console.log(
+                        `[AI Core] Đã tự động phong cấp thành: ${pieceWord.toUpperCase()}`,
+                    );
+                } else {
+                    console.warn(
+                        '⚠️ [AI Core] Giao diện phong cấp không xuất hiện hoặc DOM bị thay đổi.',
+                    );
+                    await new Promise((r) => setTimeout(r, 50));
+                    await chrome.runtime
+                        .sendMessage({
+                            action: 'execute_hardware_click',
+                            x: end.x,
+                            y: end.y,
+                        })
+                        .catch(() => {});
+                }
+            }
         } catch (err) {
             console.error('🔥 [AI Core] Lỗi click phần cứng:', err);
             this.state.isAutoPilot = false;
@@ -418,28 +496,6 @@ class AICore {
             this.state.masterMoveList.push(...newMoves.slice(matchLen));
     }
 
-    private getClockMs(isWhite: boolean): number {
-        const query = isWhite
-            ? '.time-white, .rclock-white .time, [class*="white"] .time, .clock-white'
-            : '.time-black, .rclock-black .time, [class*="black"] .time, .clock-black';
-
-        const nodes = document.querySelectorAll(query);
-        for (let i = 0; i < nodes.length; i++) {
-            const text = (nodes[i] as HTMLElement).innerText?.replace(
-                /[^0-9:\.]/g,
-                '',
-            );
-            if (text && /\d/.test(text)) {
-                if (text.includes(':')) {
-                    const [m, s] = text.split(':');
-                    return (parseInt(m, 10) * 60 + parseFloat(s)) * 1000;
-                }
-                return parseFloat(text) * 1000;
-            }
-        }
-        return 0;
-    }
-
     private processGameState(force = false) {
         if (
             !this.state.isServerReady ||
@@ -462,12 +518,7 @@ class AICore {
             );
         });
 
-        const wTime = this.getClockMs(true);
-        const bTime = this.getClockMs(false);
-        let goCmd = 'go movetime 200';
-        if (wTime > 0 && bTime > 0) {
-            goCmd = `go wtime ${Math.floor(wTime)} btime ${Math.floor(bTime)}`;
-        }
+        const goCmd = 'go movetime 250';
 
         if (nodes.length === 0) {
             this.syncMoveList([]);
