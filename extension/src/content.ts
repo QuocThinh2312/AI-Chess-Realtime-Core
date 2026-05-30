@@ -260,7 +260,7 @@ class AICore {
         this.state.isExecuting = true;
         const unlockTimer = setTimeout(() => {
             this.state.isExecuting = false;
-        }, 1500);
+        }, 1000);
         const isBlack = this.ui.isBlackOrientation();
 
         try {
@@ -278,16 +278,17 @@ class AICore {
                 isBlack,
             );
 
-            await chrome.runtime
+            chrome.runtime
                 .sendMessage({
                     action: 'execute_hardware_click',
                     x: start.x,
                     y: start.y,
                 })
                 .catch(() => {});
-            await new Promise((r) => setTimeout(r, 15));
 
-            await chrome.runtime
+            await new Promise((r) => setTimeout(r, 1));
+
+            chrome.runtime
                 .sendMessage({
                     action: 'execute_hardware_click',
                     x: end.x,
@@ -297,7 +298,6 @@ class AICore {
 
             if (moveString.length === 5 && this.state.isAutoPilot) {
                 const promoteTo = moveString[4].toLowerCase();
-
                 const pieceClassMap: Record<string, string> = {
                     q: 'queen',
                     r: 'rook',
@@ -305,7 +305,6 @@ class AICore {
                     n: 'knight',
                 };
                 const pieceWord = pieceClassMap[promoteTo] || 'queen';
-
                 let targetEl: HTMLElement | null = null;
 
                 const selectors = [
@@ -323,8 +322,7 @@ class AICore {
                     `.promotion-window [class*="${pieceWord}"]`,
                 ];
 
-                for (let i = 0; i < 50; i++) {
-                    await new Promise((r) => setTimeout(r, 10));
+                for (let i = 0; i < 200; i++) {
                     for (const selector of selectors) {
                         const el = document.querySelector(selector);
                         if (el && el.getBoundingClientRect().width > 0) {
@@ -333,31 +331,26 @@ class AICore {
                         }
                     }
                     if (targetEl) break;
+
+                    await new Promise((r) => setTimeout(r, 1));
                 }
 
                 if (targetEl) {
                     const rect = targetEl.getBoundingClientRect();
-                    const targetX = rect.left + rect.width / 2;
-                    const targetY = rect.top + rect.height / 2;
 
-                    await new Promise((r) => setTimeout(r, 50));
-
-                    await chrome.runtime
+                    chrome.runtime
                         .sendMessage({
                             action: 'execute_hardware_click',
-                            x: targetX,
-                            y: targetY,
+                            x: rect.left + rect.width / 2,
+                            y: rect.top + rect.height / 2,
                         })
                         .catch(() => {});
+
                     console.log(
-                        `[AI Core] Đã tự động phong cấp thành: ${pieceWord.toUpperCase()}`,
+                        `⚡ [Speed] Chốt ${pieceWord.toUpperCase()} với độ trễ 0ms!`,
                     );
                 } else {
-                    console.warn(
-                        '⚠️ [AI Core] Giao diện phong cấp không xuất hiện hoặc DOM bị thay đổi.',
-                    );
-                    await new Promise((r) => setTimeout(r, 50));
-                    await chrome.runtime
+                    chrome.runtime
                         .sendMessage({
                             action: 'execute_hardware_click',
                             x: end.x,
@@ -367,7 +360,7 @@ class AICore {
                 }
             }
         } catch (err) {
-            console.error('🔥 [AI Core] Lỗi click phần cứng:', err);
+            console.error('🔥 [AI Chess Realtime Core] Lỗi click:', err);
             this.state.isAutoPilot = false;
             this.ui.setStatus('#ef4444');
             this.ui.clearArrow();
@@ -496,6 +489,40 @@ class AICore {
             this.state.masterMoveList.push(...newMoves.slice(matchLen));
     }
 
+    private getClockMs(isWhite: boolean): number {
+        const query = isWhite
+            ? '.time-white, .rclock-white .time, .clock-white, wc-clock[color="white"], .clock-component.clock-white'
+            : '.time-black, .rclock-black .time, .clock-black, wc-clock[color="black"], .clock-component.clock-black';
+
+        const nodes = document.querySelectorAll(query);
+        for (let i = 0; i < nodes.length; i++) {
+            const el = nodes[i] as HTMLElement;
+            let text = el.innerText || el.textContent || '';
+
+            text = text.replace(/[^0-9:\.]/g, '').trim();
+
+            if (text && /\d/.test(text)) {
+                const parts = text.split(':');
+                let seconds = 0;
+
+                if (parts.length === 3) {
+                    seconds =
+                        parseInt(parts[0], 10) * 3600 +
+                        parseInt(parts[1], 10) * 60 +
+                        parseFloat(parts[2]);
+                } else if (parts.length === 2) {
+                    seconds =
+                        parseInt(parts[0], 10) * 60 + parseFloat(parts[1]);
+                } else if (parts.length === 1) {
+                    seconds = parseFloat(parts[0]);
+                }
+
+                return Math.floor(seconds * 1000);
+            }
+        }
+        return 0;
+    }
+
     private processGameState(force = false) {
         if (
             !this.state.isServerReady ||
@@ -518,7 +545,17 @@ class AICore {
             );
         });
 
-        const goCmd = 'go movetime 250';
+        const isWhite = !this.ui.isBlackOrientation();
+        const myRemainingTimeMs = this.getClockMs(isWhite);
+
+        let moveTimeMs = 250;
+
+        if (myRemainingTimeMs > 0) {
+            let calculatedTime = Math.floor(myRemainingTimeMs / 50);
+            moveTimeMs = Math.max(50, Math.min(calculatedTime, 400));
+        }
+
+        const goCmd = `go movetime ${moveTimeMs}`;
 
         if (nodes.length === 0) {
             this.syncMoveList([]);
@@ -621,7 +658,7 @@ class AICore {
             clearTimeout(this.moveUpdateTimeout);
             this.moveUpdateTimeout = window.setTimeout(
                 () => this.processGameState(false),
-                80,
+                5,
             );
         });
 

@@ -31,6 +31,9 @@ class ChessServer {
                 'setoption name Threads value 8',
                 'setoption name Use NNUE value true',
                 'setoption name SyzygyPath value ./Syzygy',
+                'setoption name SyzygyProbeDepth value 1',
+                'setoption name SyzygyProbeLimit value 7',
+                'setoption name Syzygy50MoveRule value true',
                 'isready',
             ];
             this.engine.stdin.write(initCommands.join('\n') + '\n');

@@ -47,7 +47,7 @@ class HardwareClicker {
                         clickCount: 1,
                     },
                 );
-                await this.sleep(4);
+                await this.sleep(1);
                 await this.sendCommandAsync(
                     action.target,
                     'Input.dispatchMouseEvent',
