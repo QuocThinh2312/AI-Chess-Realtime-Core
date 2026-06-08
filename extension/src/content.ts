@@ -152,6 +152,46 @@ class AICore {
         this.setupKeyboard();
         this.setupResetListeners();
         this.setupDOMObserver();
+
+        setInterval(() => this.checkAndAutoRestart(), 1000);
+    }
+
+    private checkAndAutoRestart() {
+        if (
+            !this.state.isAutoPilot ||
+            !window.location.hostname.includes('chess.com')
+        )
+            return;
+
+        if (this.state.isExecuting) return;
+
+        const newGameBtn = document.querySelector(
+            '[data-cy="game-over-modal-new-game-button"]',
+        ) as HTMLButtonElement;
+
+        if (newGameBtn && newGameBtn.offsetParent !== null) {
+            console.log(
+                '🔄 [Auto Restart] Ván cờ kết thúc. Đang tự động tìm trận mới...',
+            );
+
+            this.state.isExecuting = true;
+
+            setTimeout(() => {
+                try {
+                    newGameBtn.click();
+                    this.resetSystem();
+                } catch (err) {
+                    console.error(
+                        '🔥 [Auto Restart] Lỗi khi tự động bấm nút New Game:',
+                        err,
+                    );
+                } finally {
+                    setTimeout(() => {
+                        this.state.isExecuting = false;
+                    }, 2000);
+                }
+            }, 1500);
+        }
     }
 
     private initSelector() {
